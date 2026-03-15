@@ -16,12 +16,18 @@ public class Circle : MonoBehaviour
     private const float HealingPerSecond = 1;
     private const float HealingRange = 3;
 
+
+    private GridShape _grid;
+    private SpriteRenderer _spriteRenderer;
+
     // Start is called before the first frame update
     private void Start()
     {
         Health = BaseHealth;
+        _grid = FindFirstObjectByType<GridShape>();
+        _spriteRenderer = GetComponent<SpriteRenderer>();
     }
-
+    
     // Update is called once per frame
     private void Update()
     {
@@ -31,19 +37,27 @@ public class Circle : MonoBehaviour
 
     private void UpdateColor()
     {
-        var grid = GameObject.FindFirstObjectByType<GridShape>();
-        var spriteRenderer = gameObject.GetComponent<SpriteRenderer>();
-        spriteRenderer.color = grid.Colors[i, j] * Health / BaseHealth;
+        _spriteRenderer.color = _grid.Colors[i, j] * Health / BaseHealth;
     }
+
+    private static Collider2D[] _results = new Collider2D[20];
 
     private void HealNearbyShapes()
     {
-        var nearbyColliders = Physics2D.OverlapCircleAll(transform.position, HealingRange);
-        foreach (var nearbyCollider in nearbyColliders)
+        for (int di = -1; di <= 1; di++)
         {
-            if (nearbyCollider != null && nearbyCollider.TryGetComponent<Circle>(out var circle))
+            for (int dj = -1; dj <= 1; dj++)
             {
-                circle.ReceiveHp(HealingPerSecond * Time.deltaTime);
+                if (di == 0 && dj == 0) continue;
+
+                int ni = i + di;
+                int nj = j + dj;
+
+                if (ni < 0 || nj < 0 || ni >= _grid._width || nj >= _grid._height)
+                    continue;
+
+                var neighbor = _grid.Circles[ni, nj];
+                neighbor.ReceiveHp(HealingPerSecond * Time.deltaTime);
             }
         }
     }
