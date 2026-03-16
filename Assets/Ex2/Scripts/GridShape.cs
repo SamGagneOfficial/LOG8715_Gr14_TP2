@@ -11,8 +11,10 @@ public class GridShape : MonoBehaviour
 
     public Color[,] Colors { get; private set; }
 
-    private int _width;
-    private int _height;
+    public Circle[,] Circles { get; private set; }
+
+    public int _width;
+    public int _height;
 
     // Start is called before the first frame update
     private void Start()
@@ -21,6 +23,8 @@ public class GridShape : MonoBehaviour
         var ratio = Camera.main!.aspect;
         _height = (int)Math.Round(Math.Sqrt(size / ratio));
         _width = (int)Math.Round(size / _height);
+
+        Circles = new Circle[_width, _height];
         
         Colors = new Color[_width, _height];
         var bottomLeftCorner = new Vector3(-_width / 2.0f, -_height / 2.0f, 0);
@@ -39,6 +43,12 @@ public class GridShape : MonoBehaviour
                 var shape = Instantiate(shapePrefab, bottomLeftCorner + new Vector3(i, j, 0), Quaternion.identity);
                 shape.GetComponent<Circle>().i = i;
                 shape.GetComponent<Circle>().j = j;
+
+                var circle = shape.GetComponent<Circle>();
+                circle.i = i;
+                circle.j = j;
+
+                Circles[i, j] = circle;
             }
         }
     }
