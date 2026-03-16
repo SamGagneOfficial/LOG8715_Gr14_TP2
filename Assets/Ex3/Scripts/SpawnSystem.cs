@@ -5,17 +5,25 @@ using Unity.Jobs;
 using Unity.Mathematics;
 using Random = UnityEngine.Random;
 
+
 public partial struct SpawnSystem : ISystem
 {
+    private Ex3Config config;
+
+    private float halfHeight;
+    private float halfWidth;
+
+    private float minLife;
+    private float maxLife;
+    private float minDecay;
+    private float maxDecay;
 
     public void OnCreate(ref SystemState state)
-    {    
-        Ex3Config config;
+    {
+        config = SystemAPI.GetSingleton<Ex3Config>();
 
-        float halfHeight;
-        float halfWidth;
-
-        float maxLife = 10.0f;
+        float minLife = 5.0f;
+        float maxLife = 15.0f;
         float minDecay = 1.0f;
         float maxDecay = 3.0f;
 
@@ -32,7 +40,8 @@ public partial struct SpawnSystem : ISystem
         var plantArch = entityManager.CreateArchetype(
             typeof(Position),
             typeof(Size),
-            typeof(Timer)
+            typeof(Timer),
+            typeof(Flags)
             );
 
         //Les proies et prédateurs ont les même composantes
@@ -53,30 +62,57 @@ public partial struct SpawnSystem : ISystem
         for (int i = 0; i < config.plantCount; i++)
         {
             // Set up Components
-            entityManager.SetComponentData(plants[i], new Position { 
-                    Value = float2(Random.Range(-halfWidth, halfWidth), Random.Range(-halfHeight, halfHeight))
-                });
+            entityManager.SetComponentData(plants[i], new Position
+            {
+                Value = new float2(Random.Range(-halfWidth, halfWidth), Random.Range(-halfHeight, halfHeight))
+            });
             entityManager.SetComponentData(plants[i], new Size { Value = Random.Range(0.2f, 3.0f) });
-            entityManager.SetComponentData(plants[i], new Timer { Value = Random.Range(0, maxLife), DecaySpeed = Random.Range(minDecay, maxDecay) });
+            entityManager.SetComponentData(plants[i], new Timer { Value = Random.Range(minLife, maxLife), DecaySpeed = 1.0f, Exponent = 0 });
+            entityManager.SetComponentData(actors[i], new Flags { Value = 0 });
         }
 
         for (int i = 0; i < config.preyCount + config.predatorCount; i++)
         {
             // Set up Components
-            entityManager.SetComponentData(actors[i], new Position {
-                    Value = float2(Random.Range(-halfWidth, halfWidth), Random.Range(-halfHeight, halfHeight))
-                });
-            entityManager.SetComponentData(actors[i], new Velocity { Value = float2.zero });
-            entityManager.SetComponentData(actors[i], new Timer { Value = Random.Range(0, maxLife), DecaySpeed = Random.Range(minDecay, maxDecay) });
-            entityManager.SetComponentData(actors[i], new Flags { Value = (i >= config.preyCount) });
-        }
+            entityManager.SetComponentData(actors[i], new Position
+            {
+                Value = new float2(Random.Range(-halfWidth, halfWidth), Random.Range(-halfHeight, halfHeight))
+            });
 
+            entityManager.SetComponentData(actors[i], new Velocity { Value = float2.zero });
+            entityManager.SetComponentData(actors[i], new Timer { Value = Random.Range(minLife, maxLife), DecaySpeed = 1.0f, Exponent = 0 });
+
+            if (i >= config.preyCount)
+            {
+                entityManager.SetComponentData(actors[i], new Flags { Value = 2 });
+            }
+            else
+            {
+                entityManager.SetComponentData(actors[i], new Flags { Value = 1 });
+            }
+        }
         plants.Dispose();
         actors.Dispose();
     }
 
     public void OnUpdate(ref SystemState state)
     {
+        var respawn = new RespawnJob
+        {
+            minLife = minLife,
+            maxLife = maxLife,
+            halfWidth = halfWidth,
+            halfHeight = halfHeight
+        };
 
+        state.Dependency = respawn.Schedule(state.Dependency);
+
+        var ecbSingleton = SystemAPI.GetSingleton<EndSimulationEntityCommandBufferSystem.Singleton>();
+        var ecb = ecbSingleton.CreateCommandBuffer(state.WorldUnmanaged).AsParallelWriter();
+
+        var death = new TimerDeathJob
+        {
+            ecb = ecb
+        }.Schedule(state.Dependency);
     }
 }

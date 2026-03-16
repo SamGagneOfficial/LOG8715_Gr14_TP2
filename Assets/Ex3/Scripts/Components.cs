@@ -24,10 +24,12 @@ public struct Timer : IComponentData
 {
     public float Value;
     public float DecaySpeed;
+    public int Exponent;
 }
 
-//Flags pour distinguer les proies des prédateurs (index 0) et la reproduction (index 1)
-//
+//Flags pour distinguer les proies des prédateurs et plantes (index 0-1) et la reproduction (index 7)
+//0 : plantes, 1 : proies, 2:prédateurs
+//index 6 is death flag?
 public struct Flags : IComponentData
 {
     public byte Value;
