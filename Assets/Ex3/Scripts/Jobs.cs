@@ -2,6 +2,7 @@ using Unity.Entities;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Burst;
+using Unity.Mathematics;
 using Random = UnityEngine.Random;
 
 [BurstCompile]
@@ -13,82 +14,175 @@ public partial struct RespawnJob : IJobEntity
     public float halfWidth;
     public float halfHeight;
 
-    public void Execute(ref Position pos, ref Timer timer, ref Flags flags)
+    public EntityCommandBuffer.ParallelWriter ecb;
+
+    public void Execute([EntityIndexInQuery] int index, Entity entity, ref Position pos, ref Timer timer, in ReproductionTag rep)
     {
-        if (timer.Value <= 0f && (flags & (1 << 7)))
+        if(timer.Value <= 0f)
         {
             pos.Value = new float2(
-                Random.Range(-halfWidth, halfWidth),
-                Random.Range(-halfHeight, halfHeight)
+            Random.Range(-halfWidth, halfWidth),
+            Random.Range(-halfHeight, halfHeight)
             );
 
             timer.Value = Random.Range(minLife, maxLife);
-            flags ^= (1 << 7);
-        }
-        else if (timer.Value <= 0f && !(flags & (1 << 7)))
-        {
-            flags = (byte)-1;
+
+            //Removes reproduction tag
+            ecb.RemoveComponent<ReproductionTag>(index, entity);
         }
     }
 }
 
 [BurstCompile]
-public partial struct TimerDeathJob : IJobEntity
+public partial struct DeathJob : IJobEntity
 {
     public EntityCommandBuffer.ParallelWriter ecb;
 
-    public void Execute(Entity entity, [ChunkIndexInQuery] int chunkIndex, ref Timer timer, in Flags flags)
+    public void Execute([EntityIndexInQuery] int index, Entity entity, ref Timer timer)
     {
-        if (timer.Value <= 0f && (flags & (1 << 6)))
+        if (timer.Value <= 0f)
         {
-            ecb.DestroyEntity(chunkIndex, entity);
+            ecb.DestroyEntity(index, entity);
         }
     }
 }
 
+//This job creates a grid of base cellSize by cellSize and hashes the index of the struct
 [BurstCompile]
-public partial struct CollisionJob : IJob
+public partial struct BuildSpatialGridJob : IJobEntity
 {
-    [ReadOnly] public NativeArray<Position> positions;
+    public NativeParallelMultiHashMap<int, Entity>.ParallelWriter grid;
+    public float cellSize;
+    public int cellCountX;
 
-    public NativeArray<Timer> timers;
-    public NativeArray<Flags> flags;
-    public float collisionRad;
-
-    public void Execute()
+    public void Execute(Entity entity, in Position pos)
     {
-        int count = positions.Length;
-        for (int i = 0; i < count; i++)
+        int cellX = (int)math.floor(pos.Value.x / cellSize);
+        int cellY = (int)math.floor(pos.Value.y / cellSize);
+        int key = cellX + cellY * cellCountX;
+
+        grid.Add(key, entity);
+    }
+}
+
+[BurstCompile]
+public partial struct CollisionJob : IJobEntity
+{
+    [ReadOnly] public NativeParallelMultiHashMap<int, Entity> grid;
+
+    public EntityCommandBuffer.ParallelWriter ecb;
+
+    [ReadOnly] public ComponentLookup<PreyTag> preys;
+    [ReadOnly] public ComponentLookup<PredatorTag> predators;
+    [ReadOnly] public ComponentLookup<PlantTag> plants;
+
+    [NativeDisableParallelForRestriction]
+    public ComponentLookup<Timer> timers;
+
+    [NativeDisableParallelForRestriction]
+    public ComponentLookup<Velocity> velocities;
+
+    [ReadOnly] public ComponentLookup<Position> positions;
+
+    public float cellSize;
+    public int cellCountX;
+
+    public void Execute(
+        [EntityIndexInQuery] int index,
+        Entity entity,
+        in Position pos)
+    {
+        int cellX = (int)math.floor(pos.Value.x / cellSize);
+        int cellY = (int)math.floor(pos.Value.y / cellSize);
+
+        int currentKey = cellX + cellY * cellCountX;
+        Entity currentTarget = entity;
+
+        if (grid.TryGetFirstValue(currentKey, out var other, out var it))
         {
-            for (int j = i + 1; j < count; j++)
+            do
             {
-                float2 delta = positions[i].Value - positions[j].Value;
+                if (other == entity)
+                    continue;
 
-                float distSq = math.lengthsq(delta);
+                HandleInteraction(index, entity, other);
+                if (Target(entity, other))
+                    currentTarget = other;
 
-                if (distSq < collisionRad * collisionRad)
+            } while (grid.TryGetNextValue(out other, ref it));
+        }
+
+        if (currentTarget != entity)
+            return;
+
+        // check 3x3 neighborhood for target
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int x = -1; x <= 1; x++)
+            {
+                int key = (cellX + x) + (cellY + y) * cellCountX;
+
+                if (grid.TryGetFirstValue(key, out var other2, out var it2))
                 {
-                    if (flags[i].Value == flags[j].Value) //Sets reproduction flags
+                    do
                     {
-                        flags[i].Value |= (1 << 7);
-                        flags[j].Value |= (1 << 7);
-                    }
-                    else
-                    {
-                        if(!(flags[i].Value & 1) && (flags[j].Value & 1) || (flags[i].Value & 1) && (flags[j].Value & 2)) //plant and prey OR prey and pred
-                        {
-                            timers[i].Exponent -= 1;
-                            timers[j].Exponent += 1;
-                        }
-                        else if (!(flags[j].Value & 1) && (flags[i].Value & 1) || (flags[i].Value & 2) && (flags[j].Value & 1)) //prey and plant OR pred and prey
-                        {
-                            timers[i].Exponent += 1;
-                            timers[j].Exponent -= 1;
-                        }
-                    }
+                        if (other2 == entity)
+                            continue;
+
+                        float dist = math.lengthsq(pos.Value - positions[other2].Value);
+
+                    } while (grid.TryGetNextValue(out other2, ref it2));
                 }
             }
         }
+    }
+
+    void HandleInteraction(int index, Entity a, Entity b)
+    {
+        if ((plants.HasComponent(a) && preys.HasComponent(b)) ||
+            (preys.HasComponent(a) && predators.HasComponent(b)))
+        {
+            var ta = timers[a];
+            var tb = timers[b];
+
+            ta.Exponent--;
+            tb.Exponent++;
+
+            timers[a] = ta;
+            timers[b] = tb;
+        } else if ((preys.HasComponent(a) && plants.HasComponent(b)) ||
+            (predators.HasComponent(a) && preys.HasComponent(b)))
+        {
+            var ta = timers[a];
+            var tb = timers[b];
+
+            ta.Exponent++;
+            tb.Exponent--;
+
+            timers[a] = ta;
+            timers[b] = tb;
+        }
+
+        if ((preys.HasComponent(a) && preys.HasComponent(b)) ||
+            (predators.HasComponent(a) && predators.HasComponent(b)))
+        {
+            ecb.AddComponent<ReproductionTag>(index, a);
+            ecb.AddComponent<ReproductionTag>(index, b);
+
+            var ta = timers[a];
+            var tb = timers[b];
+
+            ta.Exponent++;
+            tb.Exponent--;
+
+            timers[a] = ta;
+            timers[b] = tb;
+        }
+    }
+
+    bool Target(Entity a, Entity b)
+    {
+        return (plants.HasComponent(a) && preys.HasComponent(b)) || (preys.HasComponent(a) && predators.HasComponent(b));
     }
 }
 
@@ -99,7 +193,7 @@ public partial struct PlantSizeJob : IJobEntity
 
     public void Execute(ref Size size, in Timer timer)
     {
-        float delta = timer.DecaySpeed * dt * Math.Pow(2, timer.Exponent);
+        float delta = timer.DecaySpeed * dt * math.exp2(timer.Exponent);
         size.Value *= timer.Value / (timer.Value + delta);
     }
 }
@@ -123,19 +217,6 @@ public partial struct MovementJob : IJobEntity
 
     public void Execute(ref Position pos, in Velocity speed)
     {
-        pos.Value.x += speed.Value.x * dt;
-        pos.Value.y += speed.Value.y * dt;
-    }
-}
-
-[BurstCompile]
-public partial struct CloseNeighborJob : IJobEntity
-{
-
-
-    public void Execute(ref Position pos, in Velocity speed)
-    {
-        pos.Value.x += speed.Value.x * dt;
-        pos.Value.y += speed.Value.y * dt;
+        pos.Value += speed.Value * dt;
     }
 }

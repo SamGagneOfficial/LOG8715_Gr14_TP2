@@ -1,6 +1,18 @@
 using Unity.Entities;
 using Unity.Mathematics;
 
+public struct Ex3ConfigComponent : IComponentData
+{
+    public int plantCount;
+    public int preyCount;
+    public int predatorCount;
+    public int gridSize;
+
+    public float PreySpeed;
+    public float PredatorSpeed;
+    public float TouchingDistance;
+}
+
 //Position 2D
 public struct Position : IComponentData
 {
@@ -27,10 +39,7 @@ public struct Timer : IComponentData
     public int Exponent;
 }
 
-//Flags pour distinguer les proies des prédateurs et plantes (index 0-1) et la reproduction (index 7)
-//0 : plantes, 1 : proies, 2:prédateurs
-//index 6 is death flag?
-public struct Flags : IComponentData
-{
-    public byte Value;
-}
+public struct PlantTag : IComponentData {}
+public struct PreyTag : IComponentData {}
+public struct PredatorTag : IComponentData {}
+public struct ReproductionTag : IComponentData {}
